@@ -6,6 +6,21 @@ st.set_page_config(page_title="Crypto OI & Funding Tracker", layout="centered")
 st.title("📊 Crypto OI & Funding Tracker")
 
 # --------------------------
+# Fetch All Supported Perpetual Symbols
+# --------------------------
+def get_perpetual_symbols():
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    try:
+        data = requests.get(url, timeout=5).json()
+        symbols = [
+            s['symbol'] for s in data['symbols']
+            if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT'
+        ]
+        return sorted(symbols)
+    except:
+        return ["BTCUSDT", "ETHUSDT"]  # fallback
+
+# --------------------------
 # API Functions
 # --------------------------
 def get_funding_rate(symbol, lookback_hours=0):
@@ -14,7 +29,6 @@ def get_funding_rate(symbol, lookback_hours=0):
         data = requests.get(url, timeout=5).json()
     except:
         return None
-
     if not isinstance(data, list) or len(data) == 0:
         return None
 
@@ -32,7 +46,6 @@ def get_open_interest_hist(symbol, lookback_hours=1):
         data = requests.get(url, timeout=5).json()
     except:
         return None
-
     if not isinstance(data, list) or len(data) == 0:
         return None
 
@@ -47,7 +60,6 @@ def get_price(symbol, lookback_hours=0):
         data = requests.get(url, timeout=5).json()
     except:
         return None
-
     if not isinstance(data, list) or len(data) == 0:
         return None
 
@@ -60,9 +72,8 @@ def get_price(symbol, lookback_hours=0):
 # --------------------------
 # Streamlit UI
 # --------------------------
-valid_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"]
-
-symbol = st.selectbox("Select Coin Symbol", valid_symbols)
+perp_symbols = get_perpetual_symbols()
+symbol = st.selectbox("Select Perpetual Coin Symbol", perp_symbols, index=perp_symbols.index("BTCUSDT"))
 
 funding_threshold = st.number_input("Funding Rate Threshold (%)", value=0.10, step=0.01)
 oi_threshold = st.number_input("OI Surge Threshold (%)", value=2.0, step=0.1)
@@ -80,7 +91,7 @@ if st.button("🔍 Check Data"):
     current_price = get_price(symbol, lookback_hours=0)
 
     if None in [baseline_funding, current_funding, baseline_oi, current_oi, baseline_price, current_price]:
-        st.error("❌ No data available. Try another symbol (maybe this coin has no futures OI data).")
+        st.error("❌ No data available for this symbol. Try another one (maybe no OI data).")
     else:
         # Calculations
         oi_change = ((current_oi - baseline_oi) / baseline_oi) * 100 if baseline_oi else 0
