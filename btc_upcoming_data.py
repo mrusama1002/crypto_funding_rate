@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import ta
 import streamlit as st
+from datetime import datetime, timedelta
 
 # ========== SETTINGS ==========
 INTERVAL = "1h"
@@ -9,7 +10,7 @@ LIMIT = 200
 ATR_MULTIPLIER = 1.5
 
 # ---------- Fetch Available Contracts ----------
-@st.cache_data(ttl=3600)  # cache for 1 hour
+@st.cache_data(ttl=3600)
 def get_available_contracts():
     url = "https://contract.mexc.com/api/v1/contract/detail"
     try:
@@ -32,6 +33,7 @@ def fetch_kline(symbol, interval=INTERVAL, limit=LIMIT):
         df = pd.DataFrame(res["data"], columns=[
             "timestamp", "open", "high", "low", "close", "volume"
         ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
@@ -40,6 +42,21 @@ def fetch_kline(symbol, interval=INTERVAL, limit=LIMIT):
         return df
     except Exception as e:
         st.error(f"❌ Could not fetch kline data: {e}")
+        return None
+
+# ---------- Fetch Funding Rate ----------
+def fetch_funding_rate(symbol):
+    url = f"https://contract.mexc.com/api/v1/contract/funding_rate/{symbol}"
+    try:
+        res = requests.get(url, timeout=10).json()
+        if "data" not in res or not res["data"]:
+            return None
+        df = pd.DataFrame(res["data"])
+        df["fundingRate"] = df["fundingRate"].astype(float)
+        df["timestamp"] = pd.to_datetime(df["fundingTime"], unit="ms")
+        return df
+    except Exception as e:
+        st.error(f"❌ Funding rate fetch error: {e}")
         return None
 
 # ---------- Signal Logic ----------
@@ -71,13 +88,10 @@ def generate_signal(df):
     target = None
     stop_loss = None
 
-    # Long Condition
     if last_close > last_ema20 > last_ema50 and last_macd > last_macd_signal and 40 <= last_rsi <= 60:
         signal = "📈 Long"
         target = entry + ATR_MULTIPLIER * atr
         stop_loss = entry - ATR_MULTIPLIER * atr
-
-    # Short Condition
     elif last_close < last_ema50 and last_macd < last_macd_signal and last_rsi > 70:
         signal = "📉 Short"
         target = entry - ATR_MULTIPLIER * atr
@@ -85,17 +99,14 @@ def generate_signal(df):
 
     if signal is None:
         return None, None, None, None
-
     return signal, round(entry, 4), round(target, 4), round(stop_loss, 4)
 
 # ---------- STREAMLIT APP ----------
-st.set_page_config(page_title="MEXC Futures Signal Scanner", layout="centered")
+st.set_page_config(page_title="MEXC Futures Scanner", layout="centered")
 
-st.title("📊 MEXC Futures Signal Scanner")
-st.write("Enter a coin symbol (example: `BTC_USDT`, `ETH_USDT`, `SOL_USDT`)")
+st.title("📊 MEXC Futures Signal Scanner with Price + Funding Rate")
 
 contracts = get_available_contracts()
-
 coin = st.text_input("Enter Coin Symbol", "BTC_USDT")
 
 if st.button("Check Signal"):
@@ -103,6 +114,19 @@ if st.button("Check Signal"):
         st.error(f"❌ {coin} not found in MEXC futures contracts. Try one of: {contracts[:5]}")
     else:
         df = fetch_kline(coin, interval=INTERVAL, limit=LIMIT)
+        fr = fetch_funding_rate(coin)
+
+        if df is not None and not df.empty:
+            now_price = df["close"].iloc[-1]
+            one_hour_ago = df["close"].iloc[-2]  # previous 1h candle close
+
+            st.info(f"💰 **Price Now:** {now_price}\n⏳ **1h Ago Price:** {one_hour_ago}")
+
+        if fr is not None and not fr.empty:
+            current_fr = fr["fundingRate"].iloc[-1]
+            past_fr = fr["fundingRate"].iloc[-2] if len(fr) > 1 else None
+            st.info(f"📊 **Funding Rate Now:** {current_fr}\n⏳ **1h Ago Funding Rate:** {past_fr}")
+
         signal, entry, target, stop = generate_signal(df)
         if signal:
             st.success(f"**{coin} → {signal}**\n\n💰 Entry: {entry}\n🎯 Target: {target}\n🛑 Stop Loss: {stop}")
