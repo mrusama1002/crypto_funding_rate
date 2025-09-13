@@ -51,7 +51,16 @@ def fetch_funding_rate(symbol):
         res = requests.get(url, timeout=10).json()
         if "data" not in res or not res["data"]:
             return None
-        df = pd.DataFrame(res["data"])
+
+        data = res["data"]
+        # Agar single dict hai to usko list bana do
+        if isinstance(data, dict):
+            data = [data]
+
+        df = pd.DataFrame(data)
+        if "fundingRate" not in df or "fundingTime" not in df:
+            return None
+
         df["fundingRate"] = df["fundingRate"].astype(float)
         df["timestamp"] = pd.to_datetime(df["fundingTime"], unit="ms")
         return df
@@ -132,3 +141,4 @@ if st.button("Check Signal"):
             st.success(f"**{coin} → {signal}**\n\n💰 Entry: {entry}\n🎯 Target: {target}\n🛑 Stop Loss: {stop}")
         else:
             st.warning(f"No clear signal found for {coin} right now.")
+
