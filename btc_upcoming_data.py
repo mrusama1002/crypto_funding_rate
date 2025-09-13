@@ -1,90 +1,116 @@
 import streamlit as st
 import requests
-import time
 from datetime import datetime, timedelta
+import time
 
-# --- Functions ---
+st.set_page_config(page_title="Crypto OI & Funding Tracker", layout="centered")
+
+st.title("📊 Crypto OI & Funding Tracker")
+
+# --------------------------
+# API Functions
+# --------------------------
 def get_funding_rate(symbol, lookback_hours=0):
     url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1000"
-    data = requests.get(url).json()
+    try:
+        data = requests.get(url).json()
+    except Exception as e:
+        return None
+
+    if not isinstance(data, list) or len(data) == 0:
+        return None
+
     if lookback_hours == 0:
         return float(data[-1]['fundingRate']) * 100
     else:
         target_time = int((datetime.utcnow() - timedelta(hours=lookback_hours)).timestamp() * 1000)
-        past = min(data, key=lambda x: abs(int(x['fundingTime']) - target_time))
+        past = min(data, key=lambda x: abs(int(x.get('fundingTime', 0)) - target_time))
         return float(past['fundingRate']) * 100
 
-def get_open_interest(symbol):
-    url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
-    data = requests.get(url).json()
-    return float(data['openInterest'])
 
 def get_open_interest_hist(symbol, lookback_hours=1):
     url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period=5m&limit=500"
-    data = requests.get(url).json()
+    try:
+        data = requests.get(url).json()
+    except Exception as e:
+        return None
+
+    if not isinstance(data, list) or len(data) == 0:
+        return None
+
     target_time = int((datetime.utcnow() - timedelta(hours=lookback_hours)).timestamp() * 1000)
-    past = min(data, key=lambda x: abs(int(x['timestamp']) - target_time))
+    past = min(data, key=lambda x: abs(int(x.get('timestamp', 0)) - target_time))
     return float(past['sumOpenInterest'])
 
+
 def get_price(symbol, lookback_hours=0):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1m&limit=60"
-    data = requests.get(url).json()
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=2"
+    try:
+        data = requests.get(url).json()
+    except Exception as e:
+        return None
+
+    if not isinstance(data, list) or len(data) == 0:
+        return None
+
     if lookback_hours == 0:
-        return float(data[-1][4])  # latest close price
+        return float(data[-1][4])  # last close
     else:
-        return float(data[0][4])   # price ~1h ago
+        return float(data[-2][4])  # one hour before close
 
-def generate_signal(funding, oi, baseline_funding, baseline_oi, funding_threshold, oi_threshold_percent):
-    signal = "Neutral"
-    if funding > funding_threshold:
-        signal = "🚨 Long Crowding → Potential Pullback"
-    elif funding < -funding_threshold:
-        signal = "🚀 Short Crowding → Potential Rally"
-    if baseline_oi:
-        oi_change = ((oi - baseline_oi) / baseline_oi) * 100
-        if oi_change > oi_threshold_percent:
-            signal += f" | 📈 OI Surge Alert! (+{oi_change:.2f}%)"
-    return signal
 
-# --- Streamlit UI ---
-st.title("📊 Crypto Futures Signal Tracker")
-st.write("Track **Funding Rate, Open Interest, and Price** vs 1h ago baseline")
+# --------------------------
+# Streamlit UI
+# --------------------------
+symbol = st.text_input("Enter Coin Symbol (e.g. BTCUSDT)", "BTCUSDT").upper()
 
-symbol = st.text_input("Enter Coin Symbol (e.g. BTCUSDT, ETHUSDT):", "BTCUSDT").upper()
-funding_threshold = 0.10   # %
-oi_threshold_percent = 2   # %
-refresh = 30               # seconds
+funding_threshold = st.number_input("Funding Rate Threshold (%)", value=0.10, step=0.01)
+oi_threshold = st.number_input("OI Surge Threshold (%)", value=2.0, step=0.1)
 
-if st.button("Start Tracking"):
-    # --- Baselines (1h ago) ---
-    baseline_funding = get_funding_rate(symbol, lookback_hours=1)
-    baseline_oi = get_open_interest_hist(symbol, lookback_hours=1)
-    baseline_price = get_price(symbol, lookback_hours=1)
+if st.button("🔍 Check Data"):
+    with st.spinner("Fetching data..."):
+        time.sleep(0.2)  # avoid API spam
 
-    st.success(f"Baseline (1h ago) for {symbol} set ✅")
-    st.write(f"**Baseline Funding Rate (1h ago):** {baseline_funding:.4f}%")
-    st.write(f"**Baseline Open Interest (1h ago):** {baseline_oi}")
-    st.write(f"**Baseline Price (1h ago):** {baseline_price}")
+        baseline_funding = get_funding_rate(symbol, lookback_hours=1)
+        current_funding = get_funding_rate(symbol, lookback_hours=0)
 
-    placeholder = st.empty()
+        baseline_oi = get_open_interest_hist(symbol, lookback_hours=1)
+        current_oi = get_open_interest_hist(symbol, lookback_hours=0)
 
-    while True:
-        try:
-            funding = get_funding_rate(symbol)
-            oi = get_open_interest(symbol)
-            price = get_price(symbol)
+        baseline_price = get_price(symbol, lookback_hours=1)
+        current_price = get_price(symbol, lookback_hours=0)
 
-            signal = generate_signal(funding, oi, baseline_funding, baseline_oi, funding_threshold, oi_threshold_percent)
+    # Validation
+    if None in [baseline_funding, current_funding, baseline_oi, current_oi, baseline_price, current_price]:
+        st.error("❌ Could not fetch full data. Check symbol or API limits.")
+        st.stop()
 
-            with placeholder.container():
-                st.subheader(f"Results for {symbol}")
-                st.metric("Current Funding Rate (%)", f"{funding:.4f}", f"{funding - baseline_funding:.4f}")
-                st.metric("Current Open Interest", f"{oi}", f"{oi - baseline_oi:.2f}")
-                st.metric("Current Price", f"{price}", f"{price - baseline_price:.2f}")
-                st.write(f"**Signal:** {signal}")
+    # Calculations
+    oi_change = ((current_oi - baseline_oi) / baseline_oi) * 100 if baseline_oi else 0
+    funding_change = current_funding - baseline_funding
+    price_change = ((current_price - baseline_price) / baseline_price) * 100 if baseline_price else 0
 
-            time.sleep(refresh)
+    # Display Results
+    st.subheader(f"📌 Results for {symbol}")
 
-        except Exception as e:
-            st.error(f"Error: {e}")
-            time.sleep(10)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Baseline Funding (1h ago)", f"{baseline_funding:.4f}%")
+        st.metric("Baseline OI (1h ago)", f"{baseline_oi:,.2f}")
+        st.metric("Baseline Price (1h ago)", f"${baseline_price:,.2f}")
+
+    with col2:
+        st.metric("Current Funding", f"{current_funding:.4f}%", delta=f"{funding_change:.4f}%")
+        st.metric("Current OI", f"{current_oi:,.2f}", delta=f"{oi_change:.2f}%")
+        st.metric("Current Price", f"${current_price:,.2f}", delta=f"{price_change:.2f}%")
+
+    # Alerts
+    st.subheader("⚠️ Alerts")
+    if abs(funding_change) > funding_threshold:
+        st.warning(f"Funding rate moved {funding_change:.4f}% (Threshold {funding_threshold}%)")
+
+    if abs(oi_change) > oi_threshold:
+        st.warning(f"Open Interest changed {oi_change:.2f}% (Threshold {oi_threshold}%)")
+
+    if abs(price_change) > 0.5:  # custom threshold
+        st.info(f"Price moved {price_change:.2f}% in last 1h")
