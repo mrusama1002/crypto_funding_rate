@@ -1,5 +1,5 @@
 import streamlit as st
-import requests
+import requests, time
 
 st.set_page_config(page_title="MEXC Futures Dashboard", layout="wide")
 st.title("📊 MEXC Futures Data Tracker")
@@ -9,12 +9,10 @@ def get_futures_contracts():
     url = "https://contract.mexc.com/api/v1/contract/detail"
     try:
         r = requests.get(url, timeout=10).json()
-        st.write("🔍 Contract list response:", r)  # Debug
         if "data" in r:
             return [c["symbol"] for c in r["data"]]
         return []
-    except Exception as e:
-        st.error(f"❌ Contract fetch error: {e}")
+    except:
         return []
 
 contracts = get_futures_contracts()
@@ -24,16 +22,17 @@ symbol = st.selectbox("Select Futures Symbol:", contracts, index=0 if contracts 
 def get_fair_price(symbol):
     url = f"https://contract.mexc.com/api/v1/contract/fair_price/{symbol}"
     r = requests.get(url, timeout=10).json()
-    st.write("📡 Fair price response:", r)  # Debug
     try:
         return float(r["data"]["fairPrice"])
     except:
         return None
 
-def get_kline_price(symbol, interval="1h", lookback=1):
-    url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}?interval={interval}&limit={lookback+1}"
+def get_kline_price(symbol, interval="Hour1"):
+    # 1 hour before price
+    end = int(time.time() * 1000)
+    start = end - 2 * 60 * 60 * 1000  # last 2 hours
+    url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}?interval={interval}&start={start}&end={end}"
     r = requests.get(url, timeout=10).json()
-    st.write("📡 Kline response:", r)  # Debug
     try:
         if "data" in r and len(r["data"]) > 0:
             return float(r["data"][0][4])  # close price
@@ -44,22 +43,16 @@ def get_kline_price(symbol, interval="1h", lookback=1):
 def get_funding_rate(symbol):
     url = f"https://contract.mexc.com/api/v1/contract/funding_rate/{symbol}"
     r = requests.get(url, timeout=10).json()
-    st.write("📡 Funding rate response:", r)  # Debug
     try:
-        if "data" in r:
-            return float(r["data"]["rate"])
-        return None
+        return float(r["data"]["fundingRate"])
     except:
         return None
 
 def get_volume(symbol):
     url = f"https://contract.mexc.com/api/v1/contract/ticker/{symbol}"
     r = requests.get(url, timeout=10).json()
-    st.write("📡 Volume response:", r)  # Debug
     try:
-        if "data" in r:
-            return float(r["data"]["amount24"])
-        return None
+        return float(r["data"]["amount24"])
     except:
         return None
 
@@ -90,6 +83,6 @@ if symbol:
 
         st.write(f"📌 **Signal:** {signal}")
     else:
-        st.error("❌ Could not fetch full data for this symbol. See debug above 👆")
+        st.error("❌ Could not fetch full data for this symbol.")
 else:
     st.warning("⚠️ No futures contracts available from API.")
