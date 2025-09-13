@@ -1,104 +1,85 @@
 import streamlit as st
 import requests
 import time
-import hmac, hashlib
 
 st.set_page_config(page_title="MEXC Futures Dashboard", layout="wide")
-st.title("📊 MEXC Futures Private API Dashboard")
+st.title("📊 MEXC Futures Public API Tracker")
 
-# --- User API Input ---
-API_KEY = st.text_input("Enter MEXC API Key:")
-API_SECRET = st.text_input("Enter MEXC API Secret:", type="password")
-
-symbol = st.text_input("Enter Futures Symbol (e.g. BTC_USDT, ETH_USDT):", "BTC_USDT")
-
-# --- Helper Functions ---
 BASE = "https://contract.mexc.com"
 
-def sign_request(params, secret):
-    """Sign the request using HMAC SHA256"""
-    query_string = '&'.join([f"{k}={v}" for k,v in sorted(params.items())])
-    signature = hmac.new(secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-    return signature
+# --- Verified Perpetual Symbols ---
+symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "LTC_USDT"]
+symbol = st.selectbox("Select Futures Symbol:", symbols)
 
-def private_request(endpoint, params):
-    """Send signed request"""
-    params["api_key"] = API_KEY
-    params["req_time"] = str(int(time.time()*1000))
-    params["sign"] = sign_request(params, API_SECRET)
-    url = f"{BASE}{endpoint}"
+# --- Fetch Functions ---
+def get_fair_price(symbol):
+    url = f"{BASE}/api/v1/contract/fair_price/{symbol}"
     try:
-        r = requests.get(url, params=params, timeout=10)
-        return r.json()
+        r = requests.get(url, timeout=10).json()
+        return float(r["data"]["fairPrice"])
+    except:
+        return None
+
+def get_funding_rate(symbol):
+    url = f"{BASE}/api/v1/contract/funding_rate/{symbol}"
+    try:
+        r = requests.get(url, timeout=10).json()
+        return float(r["data"]["fundingRate"])
+    except:
+        return None
+
+def get_kline_price(symbol):
+    # last 2 hours Kline (Hour1 interval)
+    end = int(time.time() * 1000)
+    start = end - 2*60*60*1000
+    url = f"{BASE}/api/v1/contract/kline/{symbol}?interval=Hour1&start={start}&end={end}"
+    try:
+        r = requests.get(url, timeout=10).json()
+        if "data" in r and len(r["data"])>0:
+            return float(r["data"][0][4])  # 1h ago close
+        return None
+    except:
+        return None
+
+def get_volume(symbol):
+    url = f"{BASE}/api/v1/contract/ticker/{symbol}"
+    try:
+        r = requests.get(url, timeout=10).json()
+        return float(r["data"]["amount24"])
     except:
         return None
 
 # --- Fetch Data ---
-def fetch_funding_rate(symbol):
-    url = f"{BASE}/api/v1/private/funding_rate"
-    params = {"symbol":symbol}
-    data = private_request("/api/v1/private/funding_rate", params)
-    if data and "data" in data:
-        return float(data["data"]["fundingRate"])
-    return None
+current_price = get_fair_price(symbol)
+funding_rate = get_funding_rate(symbol)
+price_1h = get_kline_price(symbol)
+volume = get_volume(symbol)
 
-def fetch_oi(symbol):
-    data = private_request("/api/v1/private/open_interest", {"symbol":symbol})
-    if data and "data" in data:
-        return float(data["data"]["amount"])
-    return None
+if current_price and funding_rate is not None:
+    price_change = ((current_price - price_1h)/price_1h*100) if price_1h else None
 
-def fetch_1h_price(symbol):
-    # last 2 hours Kline
-    end = int(time.time()*1000)
-    start = end - 2*60*60*1000
-    params = {"symbol":symbol,"interval":"Hour1","start":start,"end":end}
-    data = private_request("/api/v1/private/kline", params)
-    if data and "data" in data and len(data["data"])>0:
-        price_1h_ago = float(data["data"][0][4])
-        price_now = float(data["data"][-1][4])
-        return price_1h_ago, price_now
-    return None, None
+    st.write(f"💰 Current Price: {current_price}")
+    st.write(f"🏦 Funding Rate: {funding_rate:.6f}")
 
-def fetch_volume(symbol):
-    data = private_request("/api/v1/private/ticker", {"symbol":symbol})
-    if data and "data" in data:
-        return float(data["data"]["amount24"])
-    return None
-
-# --- Generate Signal ---
-def generate_signal(funding, oi, price_change):
-    if funding>0.001 and oi>0 and price_change>1:
-        return "🚀 Bullish"
-    elif funding<-0.001 and oi>0 and price_change<-1:
-        return "🐻 Bearish"
+    if price_1h:
+        st.write(f"⏳ 1 Hour Before Price: {price_1h}")
+        st.write(f"📉 Price Change (1h): {price_change:.2f}%")
     else:
-        return "😐 Neutral"
+        st.write("⏳ 1 Hour Before Price: Not Available")
 
-# --- Main ---
-if st.button("Fetch Data"):
-
-    if not API_KEY or not API_SECRET:
-        st.error("❌ Enter your API Key and Secret first.")
-    elif not symbol:
-        st.error("❌ Enter symbol.")
+    if volume:
+        st.write(f"📊 24h Volume: {volume}")
     else:
-        funding = fetch_funding_rate(symbol)
-        oi = fetch_oi(symbol)
-        price_1h, price_now = fetch_1h_price(symbol)
-        vol = fetch_volume(symbol)
+        st.write("📊 24h Volume: Not Available")
 
-        if None in [funding, oi, price_1h, price_now, vol]:
-            st.error("❌ Could not fetch full data. Check API keys or symbol.")
-        else:
-            price_change = ((price_now-price_1h)/price_1h)*100
+    # Simple signal
+    if funding_rate>0.001 and price_change and price_change>1:
+        signal = "🚀 Bullish Signal"
+    elif funding_rate<-0.001 and price_change and price_change<-1:
+        signal = "🐻 Bearish Signal"
+    else:
+        signal = "😐 Neutral"
+    st.write(f"📌 Signal: {signal}")
 
-            st.write(f"💰 Current Price: {price_now}")
-            st.write(f"⏳ 1 Hour Before Price: {price_1h}")
-            st.write(f"📉 Price Change: {price_change:.2f}%")
-            st.write(f"🏦 Funding Rate: {funding:.6f}")
-            st.write(f"📊 Open Interest (OI): {oi}")
-            st.write(f"📦 24h Volume: {vol}")
-
-            signal = generate_signal(funding, oi, price_change)
-            st.write(f"📌 Signal: {signal}")
+else:
+    st.error("❌ Could not fetch data. Symbol may be restricted or API down.")
