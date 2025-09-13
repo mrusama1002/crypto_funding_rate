@@ -1,88 +1,134 @@
 import streamlit as st
 import requests
 import pandas as pd
+import ta
 from datetime import datetime, timedelta
 
-# ---------- Binance Futures API ----------
-BASE_URL = "https://fapi.binance.com"
+# ============ SETTINGS ============
+INTERVAL = "Min60"  # 1 hour candles in MEXC format
+ATR_MULTIPLIER = 1.5
 
-def fetch_ohlcv(symbol, interval="1h", limit=100):
-    url = f"{BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+# ---------- MEXC API Functions ----------
+
+def fetch_kline(symbol, interval=INTERVAL, limit=200):
+    url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}"
+    params = {"interval": interval, "limit": limit}
     try:
-        data = requests.get(url, timeout=10).json()
-        df = pd.DataFrame(data, columns=[
-            "timestamp","open","high","low","close","volume",
-            "close_time","quote_asset_volume","num_trades",
-            "taker_buy_base","taker_buy_quote","ignore"
-        ])
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code != 200:
+            st.error(f"MEXC Kline error: {res.text}")
+            return None
+        data = res.json()
+        if "data" not in data or not isinstance(data["data"], list) or len(data["data"]["data"] if "data" in data and isinstance(data["data"], dict) else data["data"]) == 0:
+            # Some variation in response JSON, check both
+            if len(data["data"]) == 0:
+                return None
+            # else continue
+        # data["data"] might be nested, depending on format
+        # Many MEXC futures kline endpoints return {"data": { "data": [...] }} or directly list
+        kl = data["data"]
+        # If nested
+        if isinstance(kl, dict) and "data" in kl:
+            kl = kl["data"]
+        df = pd.DataFrame(kl, columns=["timestamp","open","high","low","close","volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
         df["close"] = df["close"].astype(float)
         df["volume"] = df["volume"].astype(float)
-        return df[["timestamp","open","high","low","close","volume"]]
+        return df
     except Exception as e:
-        st.error(f"❌ Binance OHLCV fetch error: {e}")
+        st.error(f"Fetch kline error for {symbol}: {e}")
         return None
 
-def fetch_open_interest(symbol):
-    url = f"{BASE_URL}/futures/data/openInterestHist?symbol={symbol}&period=5m&limit=100"
-    try:
-        return requests.get(url, timeout=10).json()
-    except:
-        return []
-
 def fetch_funding_rate(symbol):
-    url = f"{BASE_URL}/fapi/v1/fundingRate?symbol={symbol}&limit=100"
-    try:
-        return requests.get(url, timeout=10).json()
-    except:
-        return []
+    # Using MEXC Websocket REST or public endpoint? MEXC doc says websocket supports funding rate
+    # But for REST, not sure in docs. Let's try REST if available
+    # If not available, return None
+    # Placeholder: return None
+    return None
 
-# ---------- AMD Signal ----------
-def check_signals(symbol, oi_thresh, funding_thresh):
-    # OI Data
-    oi_data = fetch_open_interest(symbol)
-    if not oi_data or not isinstance(oi_data, list) or "timestamp" not in oi_data[0]:
-        return f"❌ No valid OI data for {symbol} (maybe API restricted)."
+# ---------- AMD Signal Functions ----------
 
-    now = int(datetime.utcnow().timestamp() * 1000)
-    one_hour_ago = now - 3600 * 1000
+def generate_signal(df, price_baseline, price_current):
+    """
+    Use indicators: EMA20, EMA50, MACD, RSI, ATR
+    Also compare price current vs price_baseline
+    """
+    if df is None or len(df) < 50:
+        return None, None, None, None
 
-    try:
-        past_oi = min(oi_data, key=lambda x: abs(int(x.get("timestamp", 0)) - one_hour_ago))
-        latest_oi = oi_data[-1]
-        oi_change = (float(latest_oi["sumOpenInterest"]) - float(past_oi["sumOpenInterest"])) / float(past_oi["sumOpenInterest"]) * 100
-    except Exception as e:
-        return f"❌ OI calculation failed: {e}"
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
 
-    # Funding
-    funding = fetch_funding_rate(symbol)
-    if not funding or "fundingRate" not in funding[-1]:
-        return f"❌ No valid funding data for {symbol}"
-    last_funding = float(funding[-1]["fundingRate"]) * 100
+    ema20 = ta.trend.EMAIndicator(close, window=20).ema_indicator()
+    ema50 = ta.trend.EMAIndicator(close, window=50).ema_indicator()
+    macd = ta.trend.MACD(close)
+    macd_line = macd.macd()
+    macd_signal = macd.macd_signal()
+    rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
+    atr = ta.volatility.AverageTrueRange(high, low, close, window=14).average_true_range().iloc[-1]
 
-    # Signal Logic
-    if oi_change > oi_thresh and last_funding > funding_thresh:
-        return f"🚀 LONG Signal on {symbol}\nOI ↑ {oi_change:.2f}% | Funding {last_funding:.4f}%"
-    elif oi_change < -oi_thresh and last_funding < -funding_thresh:
-        return f"🔻 SHORT Signal on {symbol}\nOI ↓ {oi_change:.2f}% | Funding {last_funding:.4f}%"
+    last_close = close.iloc[-1]
+    last_ema20 = ema20.iloc[-1]
+    last_ema50 = ema50.iloc[-1]
+    last_macd = macd_line.iloc[-1]
+    last_macd_signal = macd_signal.iloc[-1]
+    last_rsi = rsi.iloc[-1]
+
+    entry = last_close
+    target = None
+    stop_loss = None
+    signal = None
+
+    # Long Condition
+    if last_close > last_ema20 and last_ema20 > last_ema50 and last_macd > last_macd_signal and 40 <= last_rsi <= 60:
+        signal = "✅ Long"
+        target = entry + ATR_MULTIPLIER * atr
+        stop_loss = entry - ATR_MULTIPLIER * atr
+    # Short Condition
+    elif last_close < last_ema50 and last_macd < last_macd_signal and last_rsi > 70:
+        signal = "❌ Short"
+        target = entry - ATR_MULTIPLIER * atr
+        stop_loss = entry + ATR_MULTIPLIER * atr
+
+    return signal, round(entry, 6), round(target, 6) if target else None, round(stop_loss, 6) if stop_loss else None
+
+# ---------- Streamlit UI ----------
+
+st.title("📊 AMD Setup Signal Scanner – MEXC (Price-based only)")
+
+coins = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "DOGE_USDT", "XRP_USDT"]
+coin = st.selectbox("Select Futures Coin", coins)
+
+# Thresholds (for price movement if you want)
+price_thresh_pct = st.slider("Price Movement Threshold (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+
+if st.button("🔍 Generate Signal"):
+    df = fetch_kline(coin, interval=INTERVAL, limit=200)
+    if df is None:
+        st.error("❌ Could not fetch kline data. Maybe wrong symbol or MEXC restricted.")
     else:
-        return f"⚠️ No clear signal for {symbol}\nOI Change: {oi_change:.2f}% | Funding: {last_funding:.4f}%"
-# ---------- STREAMLIT APP ----------
-st.title("📊 AMD Setup Signal Scanner")
+        # price baseline vs now
+        price_baseline = df["close"].iloc[-2]  # one hour before
+        price_current = df["close"].iloc[-1]
 
-# Dropdown for Futures coins
-coins = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT", "LTCUSDT"]
-selected_coin = st.selectbox("Select a Futures Coin", coins)
+        signal, entry, target, stop = generate_signal(df, price_baseline, price_current)
 
-# Threshold controls
-funding_threshold = st.number_input("Funding Rate Threshold (%)", value=0.10, step=0.01)
-oi_threshold = st.number_input("OI Surge Threshold (%)", value=2.0, step=0.5)
+        st.write(f"Price 1h ago: {price_baseline:.6f} USDT")
+        st.write(f"Price now: {price_current:.6f} USDT")
+        st.write(f"Price Change: {((price_current - price_baseline)/price_baseline)*100:.2f}%")
 
-# Run Signal
-if st.button("🔍 Check Signal"):
-    result = check_signals(selected_coin, oi_threshold, funding_threshold)
-    st.write(result)
+        if signal:
+            st.success(f"Signal: {signal}")
+            st.write(f"Entry: {entry}")
+            st.write(f"Target: {target}")
+            st.write(f"Stop Loss: {stop}")
+        else:
+            st.warning("⚠️ No clear signal based on price+indicators.")
 
+        # Optional: price movement threshold alert
+        if abs((price_current - price_baseline)/price_baseline)*100 > price_thresh_pct:
+            st.info(f"⚠️ Price movement > {price_thresh_pct}% threshold.")
