@@ -8,31 +8,33 @@ st.title("📊 MEXC Futures Data Tracker")
 def get_futures_contracts():
     url = "https://contract.mexc.com/api/v1/contract/detail"
     try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        if "data" in data:
-            return [c["symbol"] for c in data["data"]]
+        r = requests.get(url, timeout=10).json()
+        st.write("🔍 Contract list response:", r)  # Debug
+        if "data" in r:
+            return [c["symbol"] for c in r["data"]]
         return []
-    except:
+    except Exception as e:
+        st.error(f"❌ Contract fetch error: {e}")
         return []
 
 contracts = get_futures_contracts()
-
 symbol = st.selectbox("Select Futures Symbol:", contracts, index=0 if contracts else None)
 
 # ---------- API Functions ----------
 def get_fair_price(symbol):
     url = f"https://contract.mexc.com/api/v1/contract/fair_price/{symbol}"
+    r = requests.get(url, timeout=10).json()
+    st.write("📡 Fair price response:", r)  # Debug
     try:
-        r = requests.get(url, timeout=10).json()
         return float(r["data"]["fairPrice"])
     except:
         return None
 
 def get_kline_price(symbol, interval="1h", lookback=1):
     url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}?interval={interval}&limit={lookback+1}"
+    r = requests.get(url, timeout=10).json()
+    st.write("📡 Kline response:", r)  # Debug
     try:
-        r = requests.get(url, timeout=10).json()
         if "data" in r and len(r["data"]) > 0:
             return float(r["data"][0][4])  # close price
         return None
@@ -41,8 +43,9 @@ def get_kline_price(symbol, interval="1h", lookback=1):
 
 def get_funding_rate(symbol):
     url = f"https://contract.mexc.com/api/v1/contract/funding_rate/{symbol}"
+    r = requests.get(url, timeout=10).json()
+    st.write("📡 Funding rate response:", r)  # Debug
     try:
-        r = requests.get(url, timeout=10).json()
         if "data" in r:
             return float(r["data"]["rate"])
         return None
@@ -51,8 +54,9 @@ def get_funding_rate(symbol):
 
 def get_volume(symbol):
     url = f"https://contract.mexc.com/api/v1/contract/ticker/{symbol}"
+    r = requests.get(url, timeout=10).json()
+    st.write("📡 Volume response:", r)  # Debug
     try:
-        r = requests.get(url, timeout=10).json()
         if "data" in r:
             return float(r["data"]["amount24"])
         return None
@@ -86,6 +90,6 @@ if symbol:
 
         st.write(f"📌 **Signal:** {signal}")
     else:
-        st.error("❌ Could not fetch full data for this symbol.")
+        st.error("❌ Could not fetch full data for this symbol. See debug above 👆")
 else:
     st.warning("⚠️ No futures contracts available from API.")
