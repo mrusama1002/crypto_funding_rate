@@ -42,20 +42,25 @@ def fetch_funding_rate(symbol):
 
 # ---------- AMD Signal ----------
 def check_signals(symbol, oi_thresh, funding_thresh):
-    # OI
+    # OI Data
     oi_data = fetch_open_interest(symbol)
-    if not oi_data:
-        return f"❌ No OI data for {symbol}"
+    if not oi_data or not isinstance(oi_data, list) or "timestamp" not in oi_data[0]:
+        return f"❌ No valid OI data for {symbol} (maybe API restricted)."
+
     now = int(datetime.utcnow().timestamp() * 1000)
     one_hour_ago = now - 3600 * 1000
-    past_oi = min(oi_data, key=lambda x: abs(int(x["timestamp"]) - one_hour_ago))
-    latest_oi = oi_data[-1]
-    oi_change = (float(latest_oi["sumOpenInterest"]) - float(past_oi["sumOpenInterest"])) / float(past_oi["sumOpenInterest"]) * 100
+
+    try:
+        past_oi = min(oi_data, key=lambda x: abs(int(x.get("timestamp", 0)) - one_hour_ago))
+        latest_oi = oi_data[-1]
+        oi_change = (float(latest_oi["sumOpenInterest"]) - float(past_oi["sumOpenInterest"])) / float(past_oi["sumOpenInterest"]) * 100
+    except Exception as e:
+        return f"❌ OI calculation failed: {e}"
 
     # Funding
     funding = fetch_funding_rate(symbol)
-    if not funding:
-        return f"❌ No funding data for {symbol}"
+    if not funding or "fundingRate" not in funding[-1]:
+        return f"❌ No valid funding data for {symbol}"
     last_funding = float(funding[-1]["fundingRate"]) * 100
 
     # Signal Logic
@@ -65,7 +70,6 @@ def check_signals(symbol, oi_thresh, funding_thresh):
         return f"🔻 SHORT Signal on {symbol}\nOI ↓ {oi_change:.2f}% | Funding {last_funding:.4f}%"
     else:
         return f"⚠️ No clear signal for {symbol}\nOI Change: {oi_change:.2f}% | Funding: {last_funding:.4f}%"
-
 # ---------- STREAMLIT APP ----------
 st.title("📊 AMD Setup Signal Scanner")
 
@@ -81,3 +85,4 @@ oi_threshold = st.number_input("OI Surge Threshold (%)", value=2.0, step=0.5)
 if st.button("🔍 Check Signal"):
     result = check_signals(selected_coin, oi_threshold, funding_threshold)
     st.write(result)
+
