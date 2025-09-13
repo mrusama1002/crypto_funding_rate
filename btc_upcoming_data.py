@@ -2,11 +2,10 @@ import requests
 import pandas as pd
 import ta
 import streamlit as st
-from datetime import datetime, timedelta
 
 # ========== SETTINGS ==========
 INTERVAL = "1h"
-LIMIT = 200
+LIMIT = 100
 ATR_MULTIPLIER = 1.5
 
 # ---------- Fetch Available Contracts ----------
@@ -53,8 +52,7 @@ def fetch_funding_rate(symbol):
             return None
 
         data = res["data"]
-        # Agar single dict hai to usko list bana do
-        if isinstance(data, dict):
+        if isinstance(data, dict):  # agar single object aya
             data = [data]
 
         df = pd.DataFrame(data)
@@ -63,7 +61,7 @@ def fetch_funding_rate(symbol):
 
         df["fundingRate"] = df["fundingRate"].astype(float)
         df["timestamp"] = pd.to_datetime(df["fundingTime"], unit="ms")
-        return df
+        return df.sort_values("timestamp")
     except Exception as e:
         st.error(f"❌ Funding rate fetch error: {e}")
         return None
@@ -112,7 +110,6 @@ def generate_signal(df):
 
 # ---------- STREAMLIT APP ----------
 st.set_page_config(page_title="MEXC Futures Scanner", layout="centered")
-
 st.title("📊 MEXC Futures Signal Scanner with Price + Funding Rate")
 
 contracts = get_available_contracts()
@@ -127,18 +124,18 @@ if st.button("Check Signal"):
 
         if df is not None and not df.empty:
             now_price = df["close"].iloc[-1]
-            one_hour_ago = df["close"].iloc[-2]  # previous 1h candle close
+            one_hour_ago = df["close"].iloc[-2]  # previous 1h candle
 
             st.info(f"💰 **Price Now:** {now_price}\n⏳ **1h Ago Price:** {one_hour_ago}")
 
         if fr is not None and not fr.empty:
             current_fr = fr["fundingRate"].iloc[-1]
-            past_fr = fr["fundingRate"].iloc[-2] if len(fr) > 1 else None
-            st.info(f"📊 **Funding Rate Now:** {current_fr}\n⏳ **1h Ago Funding Rate:** {past_fr}")
+            prev_fr = fr["fundingRate"].iloc[-2] if len(fr) > 1 else None
+
+            st.info(f"📊 **Funding Rate Now:** {current_fr}\n⏳ **Prev Funding Rate:** {prev_fr}")
 
         signal, entry, target, stop = generate_signal(df)
         if signal:
             st.success(f"**{coin} → {signal}**\n\n💰 Entry: {entry}\n🎯 Target: {target}\n🛑 Stop Loss: {stop}")
         else:
             st.warning(f"No clear signal found for {coin} right now.")
-
