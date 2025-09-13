@@ -6,7 +6,7 @@ st.set_page_config(page_title="Crypto Tracker Dashboard", layout="wide")
 st.title("📊 Top Coins Whale & Holder Tracker (BSC & Ethereum)")
 
 # ---------------- CONFIG ----------------
-BSCSCAN_API_KEY = st.text_input("Enter BscScan API Key:", "")
+BSCSCAN_API_KEY = "C1357E5QDJDCCSPEIKCEQIT1NDNZ7QER2X"  # Hardcoded API key
 TOP_COINS = st.number_input("Number of Top Coins to Track:", value=50)
 WHALE_THRESHOLD_USD = st.number_input("Whale Threshold USD:", value=100000)
 HOLDER_GROWTH_ALERT = st.number_input("Holder Growth Alert %:", value=5)
@@ -27,7 +27,7 @@ def get_top_coins(n=50):
         return []
 
 def get_token_transfers(token_address):
-    if not token_address or not BSCSCAN_API_KEY:
+    if not token_address:
         return []
     url = f"https://api.bscscan.com/api?module=account&action=tokentx&contractaddress={token_address}&page=1&offset=100&sort=desc&apikey={BSCSCAN_API_KEY}"
     try:
