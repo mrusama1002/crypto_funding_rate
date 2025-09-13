@@ -1,28 +1,37 @@
-import streamlit as st
 import requests
 import pandas as pd
 import ta
-from datetime import datetime
+import streamlit as st
 
-# ============ SETTINGS ============
-INTERVAL = "Min60"  # 1 hour candles in MEXC format
+# ========== SETTINGS ==========
+INTERVAL = "1h"
+LIMIT = 200
 ATR_MULTIPLIER = 1.5
 
-# ---------- MEXC API Functions ----------
+# ---------- Fetch Available Contracts ----------
+@st.cache_data(ttl=3600)  # cache for 1 hour
+def get_available_contracts():
+    url = "https://contract.mexc.com/api/v1/contract/detail"
+    try:
+        res = requests.get(url, timeout=10).json()
+        if "data" not in res:
+            return []
+        return [c["symbol"] for c in res["data"]]
+    except Exception as e:
+        st.error(f"❌ Contract fetch error: {e}")
+        return []
 
-def fetch_kline(symbol, interval=INTERVAL, limit=200):
+# ---------- Fetch Kline ----------
+def fetch_kline(symbol, interval=INTERVAL, limit=LIMIT):
     url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}"
     params = {"interval": interval, "limit": limit}
     try:
-        res = requests.get(url, params=params, timeout=10)
-        if res.status_code != 200:
-            st.error(f"MEXC Kline error: {res.text}")
+        res = requests.get(url, params=params, timeout=10).json()
+        if "data" not in res or not res["data"]:
             return None
-        data = res.json()
-        if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
-            return None
-        df = pd.DataFrame(data["data"], columns=["timestamp","open","high","low","close","volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = pd.DataFrame(res["data"], columns=[
+            "timestamp", "open", "high", "low", "close", "volume"
+        ])
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
@@ -30,13 +39,12 @@ def fetch_kline(symbol, interval=INTERVAL, limit=200):
         df["volume"] = df["volume"].astype(float)
         return df
     except Exception as e:
-        st.error(f"Fetch kline error for {symbol}: {e}")
+        st.error(f"❌ Could not fetch kline data: {e}")
         return None
 
-# ---------- AMD Signal Functions ----------
-
-def generate_signal(df, price_baseline, price_current):
-    if df is None or len(df) < 50:
+# ---------- Signal Logic ----------
+def generate_signal(df):
+    if df is None or df.empty or len(df) < 50:
         return None, None, None, None
 
     close = df["close"]
@@ -58,56 +66,45 @@ def generate_signal(df, price_baseline, price_current):
     last_macd_signal = macd_signal.iloc[-1]
     last_rsi = rsi.iloc[-1]
 
+    signal = None
     entry = last_close
     target = None
     stop_loss = None
-    signal = None
 
     # Long Condition
-    if last_close > last_ema20 and last_ema20 > last_ema50 and last_macd > last_macd_signal and 40 <= last_rsi <= 60:
-        signal = "✅ Long"
+    if last_close > last_ema20 > last_ema50 and last_macd > last_macd_signal and 40 <= last_rsi <= 60:
+        signal = "📈 Long"
         target = entry + ATR_MULTIPLIER * atr
         stop_loss = entry - ATR_MULTIPLIER * atr
+
     # Short Condition
     elif last_close < last_ema50 and last_macd < last_macd_signal and last_rsi > 70:
-        signal = "❌ Short"
+        signal = "📉 Short"
         target = entry - ATR_MULTIPLIER * atr
         stop_loss = entry + ATR_MULTIPLIER * atr
 
-    return signal, round(entry, 6), round(target, 6) if target else None, round(stop_loss, 6) if stop_loss else None
+    if signal is None:
+        return None, None, None, None
 
-# ---------- Streamlit UI ----------
+    return signal, round(entry, 4), round(target, 4), round(stop_loss, 4)
 
-st.title("📊 AMD Setup Signal Scanner – MEXC")
+# ---------- STREAMLIT APP ----------
+st.set_page_config(page_title="MEXC Futures Signal Scanner", layout="centered")
 
-# User input for coin
-coin = st.text_input("Enter Futures Coin Symbol (e.g., BTC_USDT, ETH_USDT):", "BTC_USDT")
+st.title("📊 MEXC Futures Signal Scanner")
+st.write("Enter a coin symbol (example: `BTC_USDT`, `ETH_USDT`, `SOL_USDT`)")
 
-# Thresholds
-price_thresh_pct = st.slider("Price Movement Threshold (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+contracts = get_available_contracts()
 
-if st.button("🔍 Generate Signal"):
-    df = fetch_kline(coin, interval=INTERVAL, limit=200)
-    if df is None:
-        st.error("❌ Could not fetch kline data. Maybe wrong symbol or MEXC restricted.")
+coin = st.text_input("Enter Coin Symbol", "BTC_USDT")
+
+if st.button("Check Signal"):
+    if coin not in contracts:
+        st.error(f"❌ {coin} not found in MEXC futures contracts. Try one of: {contracts[:5]}")
     else:
-        # price baseline vs now
-        price_baseline = df["close"].iloc[-2]  # one hour before
-        price_current = df["close"].iloc[-1]
-
-        signal, entry, target, stop = generate_signal(df, price_baseline, price_current)
-
-        st.write(f"Price 1h ago: {price_baseline:.6f} USDT")
-        st.write(f"Price now: {price_current:.6f} USDT")
-        st.write(f"Price Change: {((price_current - price_baseline)/price_baseline)*100:.2f}%")
-
+        df = fetch_kline(coin, interval=INTERVAL, limit=LIMIT)
+        signal, entry, target, stop = generate_signal(df)
         if signal:
-            st.success(f"Signal: {signal}")
-            st.write(f"Entry: {entry}")
-            st.write(f"Target: {target}")
-            st.write(f"Stop Loss: {stop}")
+            st.success(f"**{coin} → {signal}**\n\n💰 Entry: {entry}\n🎯 Target: {target}\n🛑 Stop Loss: {stop}")
         else:
-            st.warning("⚠️ No clear signal based on price+indicators.")
-
-        if abs((price_current - price_baseline)/price_baseline)*100 > price_thresh_pct:
-            st.info(f"⚠️ Price movement > {price_thresh_pct}% threshold.")
+            st.warning(f"No clear signal found for {coin} right now.")
