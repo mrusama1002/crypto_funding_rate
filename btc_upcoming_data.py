@@ -2,84 +2,66 @@ import streamlit as st
 import requests
 import time
 
-st.set_page_config(page_title="MEXC Futures Dashboard", layout="wide")
-st.title("📊 MEXC Futures Public API Tracker")
+st.set_page_config(page_title="Crypto Signal Tracker", layout="wide")
+st.title("📊 MEXC Funding + Binance Price/Volume Tracker")
 
-BASE = "https://contract.mexc.com"
+# --- Select Symbol ---
+symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"]
+symbol = st.selectbox("Select Symbol:", symbols)
 
-# --- Verified Perpetual Symbols ---
-symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "LTC_USDT"]
-symbol = st.selectbox("Select Futures Symbol:", symbols)
-
-# --- Fetch Functions ---
-def get_fair_price(symbol):
-    url = f"{BASE}/api/v1/contract/fair_price/{symbol}"
-    try:
-        r = requests.get(url, timeout=10).json()
-        return float(r["data"]["fairPrice"])
-    except:
-        return None
-
+# ---------- MEXC Functions ----------
 def get_funding_rate(symbol):
-    url = f"{BASE}/api/v1/contract/funding_rate/{symbol}"
+    url = f"https://contract.mexc.com/api/v1/contract/funding_rate/{symbol}"
     try:
         r = requests.get(url, timeout=10).json()
         return float(r["data"]["fundingRate"])
     except:
         return None
 
-def get_kline_price(symbol):
-    # last 2 hours Kline (Hour1 interval)
-    end = int(time.time() * 1000)
-    start = end - 2*60*60*1000
-    url = f"{BASE}/api/v1/contract/kline/{symbol}?interval=Hour1&start={start}&end={end}"
+# ---------- Binance Functions ----------
+def get_binance_ohlcv(symbol, interval="1h", limit=2):
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         r = requests.get(url, timeout=10).json()
-        if "data" in r and len(r["data"])>0:
-            return float(r["data"][0][4])  # 1h ago close
-        return None
+        if len(r) >= 2:
+            price_1h_ago = float(r[-2][4])  # Close price 1 hour ago
+            price_now = float(r[-1][4])    # Latest close price
+            volume = float(r[-1][5])       # Latest volume
+            return price_1h_ago, price_now, volume
+        return None, None, None
     except:
-        return None
+        return None, None, None
 
-def get_volume(symbol):
-    url = f"{BASE}/api/v1/contract/ticker/{symbol}"
-    try:
-        r = requests.get(url, timeout=10).json()
-        return float(r["data"]["amount24"])
-    except:
-        return None
-
-# --- Fetch Data ---
-current_price = get_fair_price(symbol)
+# ---------- Fetch Data ----------
 funding_rate = get_funding_rate(symbol)
-price_1h = get_kline_price(symbol)
-volume = get_volume(symbol)
+price_1h, price_now, volume = get_binance_ohlcv(symbol)
 
-if current_price and funding_rate is not None:
-    price_change = ((current_price - price_1h)/price_1h*100) if price_1h else None
+if funding_rate is not None and price_now is not None:
+    price_change = ((price_now - price_1h)/price_1h*100) if price_1h else None
 
-    st.write(f"💰 Current Price: {current_price}")
-    st.write(f"🏦 Funding Rate: {funding_rate:.6f}")
+    st.write(f"💰 Current Price: {price_now}")
+    st.write(f"🏦 MEXC Funding Rate: {funding_rate:.6f}")
 
     if price_1h:
-        st.write(f"⏳ 1 Hour Before Price: {price_1h}")
+        st.write(f"⏳ 1 Hour Before Price (Binance): {price_1h}")
         st.write(f"📉 Price Change (1h): {price_change:.2f}%")
     else:
         st.write("⏳ 1 Hour Before Price: Not Available")
 
     if volume:
-        st.write(f"📊 24h Volume: {volume}")
+        st.write(f"📊 24h Volume (Binance): {volume}")
     else:
         st.write("📊 24h Volume: Not Available")
 
-    # Simple signal
+    # Simple Signal
     if funding_rate>0.001 and price_change and price_change>1:
-        signal = "🚀 Bullish Signal"
+        signal = "🚀 Bullish"
     elif funding_rate<-0.001 and price_change and price_change<-1:
-        signal = "🐻 Bearish Signal"
+        signal = "🐻 Bearish"
     else:
         signal = "😐 Neutral"
+
     st.write(f"📌 Signal: {signal}")
 
 else:
-    st.error("❌ Could not fetch data. Symbol may be restricted or API down.")
+    st.error("❌ Could not fetch full data. Check symbol or API endpoints.")
