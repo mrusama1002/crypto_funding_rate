@@ -4,33 +4,32 @@ import pandas as pd
 import ta
 
 # ============ SETTINGS ============
-INTERVAL = "1h"
+INTERVAL = "Min60"  # 1h candles
 ATR_MULTIPLIER = 1.5
 
-# ---------- BINANCE API ----------
+# ---------- MEXC API ----------
 def fetch_ohlcv(symbol, interval=INTERVAL, limit=200):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
     try:
         res = requests.get(url, timeout=10)
         if res.status_code != 200:
-            st.error(f"Binance error: {res.text}")
+            st.error(f"MEXC error: {res.text}")
             return None
         data = res.json()
-        if not isinstance(data, list) or len(data) == 0:
+        if "data" not in data or len(data["data"]) == 0:
             return None
-        df = pd.DataFrame(data, columns=[
-            "timestamp","open","high","low","close","volume",
-            "close_time","quote_asset_volume","num_trades",
-            "taker_buy_base","taker_buy_quote","ignore"
+
+        df = pd.DataFrame(data["data"], columns=[
+            "timestamp","open","high","low","close","volume"
         ])
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
         df["close"] = df["close"].astype(float)
         df["volume"] = df["volume"].astype(float)
-        return df[["timestamp","open","high","low","close","volume"]]
+        return df
     except Exception as e:
-        st.error(f"❌ Binance OHLCV fetch error for {symbol}: {e}")
+        st.error(f"❌ MEXC OHLCV fetch error for {symbol}: {e}")
         return None
 
 # ---------- AMD Signal ----------
@@ -79,12 +78,12 @@ def generate_signal(df):
     return signal, round(entry,4), round(target,4), round(stop_loss,4)
 
 # ---------- STREAMLIT UI ----------
-st.set_page_config(page_title="AMD Crypto Signal Scanner", layout="centered")
+st.set_page_config(page_title="AMD Crypto Signal Scanner (MEXC)", layout="centered")
 
-st.title("📊 AMD Setup Signal Scanner")
-st.write("Check **Binance Perpetual Futures** coins for Long/Short signals")
+st.title("📊 AMD Setup Signal Scanner – MEXC Futures")
+st.write("Check **MEXC Perpetual Futures** coins for Long/Short signals")
 
-coin = st.text_input("Enter Symbol (e.g. BTCUSDT, ETHUSDT, DOGEUSDT)", "BTCUSDT").upper()
+coin = st.text_input("Enter Symbol (e.g. BTC_USDT, ETH_USDT, DOGE_USDT)", "BTC_USDT").upper()
 
 if st.button("🔍 Get Signal"):
     df = fetch_ohlcv(coin)
@@ -98,4 +97,4 @@ if st.button("🔍 Get Signal"):
         else:
             st.warning(f"No clear signal found for {coin} right now.")
     else:
-        st.error("❌ No data fetched. Maybe wrong symbol or Binance restriction.")
+        st.error("❌ No data fetched. Maybe wrong symbol or MEXC restriction.")
