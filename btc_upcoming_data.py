@@ -1,72 +1,87 @@
 import streamlit as st
-from binance.client import Client
+import requests
 import time
+from datetime import datetime
 
-st.set_page_config(page_title="Crypto Live Tracker", layout="wide")
-st.title("📊 Live Crypto Tracker (Binance Futures + MEXC Funding Rate)")
+st.set_page_config(page_title="BSC Whale & Holder Tracker", layout="wide")
+st.title("🚨 BSC Small-Cap Whale & Holder Alert")
 
-# ---------- API Input ----------
-BINANCE_API_KEY = st.text_input("Enter Binance API Key:")
-BINANCE_API_SECRET = st.text_input("Enter Binance API Secret:", type="password")
+# ---------------- CONFIG ----------------
+BSCSCAN_API_KEY = st.text_input("Enter BscScan API Key:", "C1357E5QDJDCCSPEIKCEQIT1NDNZ7QER2X")
+TELEGRAM_BOT_TOKEN = st.text_input("Enter Telegram Bot Token:", "8202693144:AAEJuDm8Ogne42y9cPG8L6ghS4jCb2hiycU")
+TELEGRAM_CHAT_ID = st.text_input("Enter Telegram Chat ID:", "1417180893")
 
-symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-symbol = st.selectbox("Select Symbol:", symbols)
+WHALE_THRESHOLD_USD = st.number_input("Whale Threshold USD:", value=100000)
+HOLDER_GROWTH_ALERT = st.number_input("Holder Growth Alert %:", value=5)
+CHECK_INTERVAL = st.number_input("Check Interval (seconds):", value=3600)
+NUM_TOP_SMALL_CAP = st.number_input("Number of Small-Cap Coins:", value=10)
 
-# ---------- Binance Client ----------
-client = None
-if BINANCE_API_KEY and BINANCE_API_SECRET:
+# ---------------- HELPERS ----------------
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
-        client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
-    except Exception as e:
-        st.error(f"❌ Binance client init error: {e}")
-
-# ---------- MEXC Funding Rate ----------
-def get_funding_rate(symbol):
-    url = f"https://contract.mexc.com/api/v1/contract/funding_rate/{symbol.replace('USDT','_USDT')}"
-    try:
-        r = requests.get(url, timeout=10).json()
-        return float(r["data"]["fundingRate"])
+        requests.post(url, data=payload)
     except:
-        return None
+        st.warning("❌ Telegram send failed")
 
-# ---------- Fetch Binance Data ----------
-def get_binance_data(symbol):
+def get_small_cap_coins():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        "vs_currency": "usd",
+        "order": "market_cap_asc",
+        "per_page": 200,
+        "page": 1
+    }
+    response = requests.get(url, params=params).json()
+    small_caps = [coin for coin in response if coin['market_cap'] < 100_000_000]
+    return small_caps[:NUM_TOP_SMALL_CAP]
+
+def get_token_transfers(token_address):
+    url = f"https://api.bscscan.com/api?module=account&action=tokentx&contractaddress={token_address}&page=1&offset=100&sort=desc&apikey={BSCSCAN_API_KEY}"
+    response = requests.get(url).json()
+    if response['status'] == '1':
+        return response['result']
+    return []
+
+def usd_value(eth_amount):
     try:
-        # Current price
-        ticker = client.futures_symbol_ticker(symbol=symbol)
-        price_now = float(ticker['price'])
-        # Klines 1h interval
-        klines = client.futures_klines(symbol=symbol, interval='1h', limit=2)
-        price_1h = float(klines[-2][4])
-        volume = float(klines[-1][5])
-        return price_now, price_1h, volume
-    except Exception as e:
-        st.error(f"❌ Binance fetch error: {e}")
-        return None, None, None
+        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd").json()
+        eth_price = response['ethereum']['usd']
+        return eth_amount * eth_price
+    except:
+        return 0
 
-# ---------- Fetch and Display ----------
-if client and symbol:
-    price_now, price_1h, volume = get_binance_data(symbol)
-    funding_rate = get_funding_rate(symbol)
+# ---------------- MAIN ----------------
+holder_history = {}
 
-    if price_now and price_1h and funding_rate is not None:
-        price_change = ((price_now-price_1h)/price_1h)*100
+if st.button("Check Small-Cap Coins Now"):
+    st.write(f"[{datetime.now()}] Checking small-cap coins...")
+    coins = get_small_cap_coins()
 
-        st.write(f"💰 Current Price (Binance): {price_now}")
-        st.write(f"⏳ 1 Hour Before Price (Binance): {price_1h}")
-        st.write(f"📉 Price Change (1h): {price_change:.2f}%")
-        st.write(f"📊 24h Volume (Binance): {volume}")
-        st.write(f"🏦 Funding Rate (MEXC): {funding_rate:.6f}")
+    for coin in coins:
+        symbol = coin['symbol'].upper()
+        address = coin.get('platforms', {}).get('ethereum')
+        if not address:
+            continue  # skip if no Ethereum contract
 
-        # Simple Signal
-        if funding_rate>0.001 and price_change>1:
-            signal = "🚀 Bullish"
-        elif funding_rate<-0.001 and price_change<-1:
-            signal = "🐻 Bearish"
-        else:
-            signal = "😐 Neutral"
+        transfers = get_token_transfers(address)
+        whale_moves = [tx for tx in transfers if usd_value(int(tx['value'])/1e18) > WHALE_THRESHOLD_USD]
 
-        st.write(f"📌 Signal: {signal}")
+        if whale_moves:
+            msg = f"🚨 Whale activity detected for {symbol}! {len(whale_moves)} big transfers."
+            st.write(msg)
+            send_telegram_message(msg)
 
-    else:
-        st.error("❌ Could not fetch full data. Check API keys or symbol.")
+        current_holders = coin['total_supply']  # approximate holders
+        previous_holders = holder_history.get(symbol, current_holders)
+        growth = ((current_holders - previous_holders) / previous_holders) * 100 if previous_holders else 0
+
+        if growth >= HOLDER_GROWTH_ALERT:
+            msg = f"📈 Holder growth alert for {symbol}: {growth:.2f}% increase!"
+            st.write(msg)
+            send_telegram_message(msg)
+
+        holder_history[symbol] = current_holders
+
+    st.write(f"[{datetime.now()}] All tokens checked.")
