@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import ta
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ============ SETTINGS ============
 INTERVAL = "Min60"  # 1 hour candles in MEXC format
@@ -19,18 +19,9 @@ def fetch_kline(symbol, interval=INTERVAL, limit=200):
             st.error(f"MEXC Kline error: {res.text}")
             return None
         data = res.json()
-        if "data" not in data or not isinstance(data["data"], list) or len(data["data"]["data"] if "data" in data and isinstance(data["data"], dict) else data["data"]) == 0:
-            # Some variation in response JSON, check both
-            if len(data["data"]) == 0:
-                return None
-            # else continue
-        # data["data"] might be nested, depending on format
-        # Many MEXC futures kline endpoints return {"data": { "data": [...] }} or directly list
-        kl = data["data"]
-        # If nested
-        if isinstance(kl, dict) and "data" in kl:
-            kl = kl["data"]
-        df = pd.DataFrame(kl, columns=["timestamp","open","high","low","close","volume"])
+        if "data" not in data or not isinstance(data["data"], list) or len(data["data"]) == 0:
+            return None
+        df = pd.DataFrame(data["data"], columns=["timestamp","open","high","low","close","volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df["open"] = df["open"].astype(float)
         df["high"] = df["high"].astype(float)
@@ -42,20 +33,9 @@ def fetch_kline(symbol, interval=INTERVAL, limit=200):
         st.error(f"Fetch kline error for {symbol}: {e}")
         return None
 
-def fetch_funding_rate(symbol):
-    # Using MEXC Websocket REST or public endpoint? MEXC doc says websocket supports funding rate
-    # But for REST, not sure in docs. Let's try REST if available
-    # If not available, return None
-    # Placeholder: return None
-    return None
-
 # ---------- AMD Signal Functions ----------
 
 def generate_signal(df, price_baseline, price_current):
-    """
-    Use indicators: EMA20, EMA50, MACD, RSI, ATR
-    Also compare price current vs price_baseline
-    """
     if df is None or len(df) < 50:
         return None, None, None, None
 
@@ -98,12 +78,12 @@ def generate_signal(df, price_baseline, price_current):
 
 # ---------- Streamlit UI ----------
 
-st.title("📊 AMD Setup Signal Scanner – MEXC (Price-based only)")
+st.title("📊 AMD Setup Signal Scanner – MEXC")
 
-coins = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "DOGE_USDT", "XRP_USDT"]
-coin = st.selectbox("Select Futures Coin", coins)
+# User input for coin
+coin = st.text_input("Enter Futures Coin Symbol (e.g., BTC_USDT, ETH_USDT):", "BTC_USDT")
 
-# Thresholds (for price movement if you want)
+# Thresholds
 price_thresh_pct = st.slider("Price Movement Threshold (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
 
 if st.button("🔍 Generate Signal"):
@@ -129,6 +109,5 @@ if st.button("🔍 Generate Signal"):
         else:
             st.warning("⚠️ No clear signal based on price+indicators.")
 
-        # Optional: price movement threshold alert
         if abs((price_current - price_baseline)/price_baseline)*100 > price_thresh_pct:
             st.info(f"⚠️ Price movement > {price_thresh_pct}% threshold.")
