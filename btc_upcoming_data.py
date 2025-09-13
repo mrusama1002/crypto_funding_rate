@@ -3,17 +3,16 @@ import requests
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Crypto OI & Funding Tracker", layout="centered")
-
 st.title("📊 Crypto OI & Funding Tracker")
 
 # --------------------------
-# API Functions (Safe with checks)
+# API Functions
 # --------------------------
 def get_funding_rate(symbol, lookback_hours=0):
     url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1000"
     try:
         data = requests.get(url, timeout=5).json()
-    except Exception:
+    except:
         return None
 
     if not isinstance(data, list) or len(data) == 0:
@@ -31,7 +30,7 @@ def get_open_interest_hist(symbol, lookback_hours=1):
     url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period=5m&limit=500"
     try:
         data = requests.get(url, timeout=5).json()
-    except Exception:
+    except:
         return None
 
     if not isinstance(data, list) or len(data) == 0:
@@ -46,7 +45,7 @@ def get_price(symbol, lookback_hours=0):
     url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=2"
     try:
         data = requests.get(url, timeout=5).json()
-    except Exception:
+    except:
         return None
 
     if not isinstance(data, list) or len(data) == 0:
@@ -61,7 +60,9 @@ def get_price(symbol, lookback_hours=0):
 # --------------------------
 # Streamlit UI
 # --------------------------
-symbol = st.text_input("Enter Coin Symbol (e.g. BTCUSDT)", "BTCUSDT").upper()
+valid_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"]
+
+symbol = st.selectbox("Select Coin Symbol", valid_symbols)
 
 funding_threshold = st.number_input("Funding Rate Threshold (%)", value=0.10, step=0.01)
 oi_threshold = st.number_input("OI Surge Threshold (%)", value=2.0, step=0.1)
@@ -78,9 +79,8 @@ if st.button("🔍 Check Data"):
     baseline_price = get_price(symbol, lookback_hours=1)
     current_price = get_price(symbol, lookback_hours=0)
 
-    # Agar koi bhi missing hai to error dikhao
     if None in [baseline_funding, current_funding, baseline_oi, current_oi, baseline_price, current_price]:
-        st.error("❌ No data available (Check symbol or API restrictions).")
+        st.error("❌ No data available. Try another symbol (maybe this coin has no futures OI data).")
     else:
         # Calculations
         oi_change = ((current_oi - baseline_oi) / baseline_oi) * 100 if baseline_oi else 0
