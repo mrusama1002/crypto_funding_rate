@@ -1,81 +1,118 @@
-import streamlit as st
 import requests
+import pandas as pd
+import streamlit as st
 from datetime import datetime
+import math
 
-st.set_page_config(page_title="Crypto Tracker Dashboard", layout="wide")
-st.title("📊 Top Coins Whale & Holder Tracker (BSC & Ethereum)")
+# ----------------- CONFIG -----------------
+WATCHLIST = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT"]
+INTERVALS = ["Min60", "Hour4"]   # Default intervals
+KL_LIMIT = 200
+ATR_PERIOD = 14
+ATR_MULTIPLIER = 1.5
+# ------------------------------------------
 
-# ---------------- CONFIG ----------------
-BSCSCAN_API_KEY = "C1357E5QDJDCCSPEIKCEQIT1NDNZ7QER2X"  # Hardcoded API key
-TOP_COINS = st.number_input("Number of Top Coins to Track:", value=50)
-WHALE_THRESHOLD_USD = st.number_input("Whale Threshold USD:", value=100000)
-HOLDER_GROWTH_ALERT = st.number_input("Holder Growth Alert %:", value=5)
-
-# ---------------- HELPERS ----------------
-def get_top_coins(n=50):
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {
-        "vs_currency": "usd",
-        "order": "market_cap_desc",
-        "per_page": n,
-        "page": 1
+def interval_to_label(interval: str) -> str:
+    mapping = {
+        "Min1": "1m", "Min5": "5m", "Min15": "15m", "Min30": "30m",
+        "Min60": "1h", "Hour4": "4h", "Day1": "1D", "Week1": "1W", "Month1": "1M"
     }
+    return mapping.get(interval, interval)
+
+def get_future_klines(symbol: str, interval="Min60", limit=200):
+    url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}?interval={interval}&limit={limit}"
     try:
-        response = requests.get(url, params=params).json()
-        return response
-    except:
-        return []
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("success") or "data" not in data:
+            return None
+        df = pd.DataFrame(data["data"], columns=[
+            "time","open","high","low","close","volume","amount"
+        ])
+        for col in ["open","high","low","close"]:
+            df[col] = df[col].astype(float)
+        return df[["time","open","high","low","close","volume"]]
+    except Exception:
+        return None
 
-def get_token_transfers(token_address):
-    if not token_address:
-        return []
-    url = f"https://api.bscscan.com/api?module=account&action=tokentx&contractaddress={token_address}&page=1&offset=100&sort=desc&apikey={BSCSCAN_API_KEY}"
-    try:
-        r = requests.get(url).json()
-        if r.get('status') == '1':
-            return r['result']
-        return []
-    except:
-        return []
+def compute_atr(df: pd.DataFrame, period=14):
+    if df is None or len(df) < period + 1:
+        return None
+    df2 = df.copy()
+    df2["H-L"] = df2["high"] - df2["low"]
+    df2["H-Cprev"] = (df2["high"] - df2["close"].shift(1)).abs()
+    df2["L-Cprev"] = (df2["low"] - df2["close"].shift(1)).abs()
+    df2["TR"] = df2[["H-L", "H-Cprev", "L-Cprev"]].max(axis=1)
+    atr = df2["TR"].rolling(period).mean().iloc[-1]
+    return None if pd.isna(atr) else float(atr)
 
-def usd_value(eth_amount):
-    try:
-        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd").json()
-        eth_price = response['ethereum']['usd']
-        return eth_amount * eth_price
-    except:
-        return 0
+def format_number(x):
+    if x is None or (isinstance(x, float) and (math.isinf(x) or math.isnan(x))):
+        return "N/A"
+    return f"{x:,.2f}" if abs(x) >= 1 else f"{x:.6f}".rstrip('0').rstrip('.')
 
-# ---------------- MAIN ----------------
-holder_history = {}
+def generate_signal(symbol: str, df: pd.DataFrame, interval: str):
+    now = datetime.now().strftime("%d-%b %I:%M %p")
+    prev = df.iloc[-2]
+    last = df.iloc[-1]
 
-if st.button("Check Top Coins Now"):
-    st.write(f"[{datetime.now()}] Checking top {TOP_COINS} coins...")
-    coins = get_top_coins(TOP_COINS)
-    results = []
+    current = float(last["close"])
+    prev_high = float(prev["high"])
+    prev_low = float(prev["low"])
+    atr = compute_atr(df, ATR_PERIOD) or abs(prev_high - prev_low) or (current * 0.005)
 
-    for coin in coins:
-        symbol = coin['symbol'].upper()
-        address = coin.get('platforms', {}).get('ethereum')
+    int_label = interval_to_label(interval)
 
-        transfers = get_token_transfers(address) if address else []
-        whale_moves = [tx for tx in transfers if usd_value(int(tx['value'])/1e18) > WHALE_THRESHOLD_USD]
-        whale_msg = f"{len(whale_moves)} whale moves" if whale_moves else "No whale moves"
+    if current > prev_high:
+        entry = current
+        tp1 = round(entry + 0.5 * atr, 6)
+        tp2 = round(entry + 1.0 * atr, 6)
+        tp3 = round(entry + 1.5 * atr, 6)
+        stop_loss = round(entry - ATR_MULTIPLIER * atr, 6)
 
-        current_holders = coin['total_supply'] or 0
-        previous_holders = holder_history.get(symbol, current_holders)
-        growth = ((current_holders - previous_holders) / previous_holders) * 100 if previous_holders else 0
-        holder_msg = f"Holder growth: {growth:.2f}%" if growth >= HOLDER_GROWTH_ALERT else "No significant growth"
+        return (
+f"🚀 **BREAKOUT ALERT** 🚀 | ⏱ {int_label}\n"
+f"💰 Current: {format_number(current)}\n"
+f"🎯 Entry: {format_number(entry)}\n"
+f"🎯 TP1: {format_number(tp1)} | TP2: {format_number(tp2)} | TP3: {format_number(tp3)}\n"
+f"🛡️ SL: {format_number(stop_loss)}\n"
+f"📈 Direction: **Go Long 🚀**"
+        )
+    elif current < prev_low:
+        entry = current
+        tp1 = round(entry - 0.5 * atr, 6)
+        tp2 = round(entry - 1.0 * atr, 6)
+        tp3 = round(entry - 1.5 * atr, 6)
+        stop_loss = round(entry + ATR_MULTIPLIER * atr, 6)
 
-        holder_history[symbol] = current_holders
+        return (
+f"🔄 **REVERSAL ALERT** 🔄 | ⏱ {int_label}\n"
+f"💰 Current: {format_number(current)}\n"
+f"🎯 Entry: {format_number(entry)}\n"
+f"🎯 TP1: {format_number(tp1)} | TP2: {format_number(tp2)} | TP3: {format_number(tp3)}\n"
+f"🛡️ SL: {format_number(stop_loss)}\n"
+f"📉 Direction: **Go Short 📉**"
+        )
+    else:
+        return f"ℹ️ {symbol} neutral @ {format_number(current)} ({int_label})"
 
-        results.append({
-            "Symbol": symbol,
-            "Current Price": coin['current_price'],
-            "Market Cap": coin['market_cap'],
-            "Whale Moves": whale_msg,
-            "Holder Growth": holder_msg
-        })
+# ----------------- STREAMLIT APP -----------------
+st.set_page_config(page_title="MEXC Futures Signal Scanner", layout="wide")
 
-    st.write(f"[{datetime.now()}] Completed check.")
-    st.table(results)
+st.title("📊 MEXC Futures Signal Scanner")
+
+coin = st.selectbox("Select coin", ["ALL"] + WATCHLIST)
+intervals = st.multiselect("Select intervals", INTERVALS, default=INTERVALS)
+
+if st.button("Run Scanner"):
+    symbols = WATCHLIST if coin == "ALL" else [coin]
+    for sym in symbols:
+        st.subheader(f"Signals for {sym}")
+        for interval in intervals:
+            df = get_future_klines(sym, interval, KL_LIMIT)
+            if df is None:
+                st.error(f"No data for {sym} ({interval})")
+                continue
+            signal = generate_signal(sym, df, interval)
+            st.markdown(signal)
