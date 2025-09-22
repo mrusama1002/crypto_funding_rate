@@ -5,8 +5,8 @@ from datetime import datetime
 import math
 
 # ----------------- CONFIG -----------------
-WATCHLIST = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "ADA_USDT", "MYX_USDT", "TUT_USDT"]
-INTERVALS = ["Min15","Min30","Min60", "Hour4"]   # scan multiple intervals
+WATCHLIST = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT"]
+INTERVALS = ["Min5","Min15","Min30","Min60", "Hour4","Day1", "Week1"]   # scan multiple intervals
 KL_LIMIT = 200
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 1.5
@@ -100,13 +100,14 @@ f"📉 Direction: **Go Short 📉**"
 # ----------------- STREAMLIT APP -----------------
 st.set_page_config(page_title="MEXC Futures Signal Scanner", layout="wide")
 
-st.title("📊 MEXC Futures Signal Scanner")
+st.title("📊 MEXC Futures Signal Scanner Price Action")
 
-coin = st.selectbox("Select coin", ["ALL"] + WATCHLIST)
+# User input coin
+coin_input = st.text_input("Enter coin (e.g. BTC_USDT) or type ALL:", "ALL").upper()
 intervals = st.multiselect("Select intervals", INTERVALS, default=INTERVALS)
 
 if st.button("Run Scanner"):
-    symbols = WATCHLIST if coin == "ALL" else [coin]
+    symbols = WATCHLIST if coin_input == "ALL" else [coin_input]
     for sym in symbols:
         st.subheader(f"Signals for {sym}")
         for interval in intervals:
@@ -116,4 +117,3 @@ if st.button("Run Scanner"):
                 continue
             signal = generate_signal(sym, df, interval)
             st.markdown(signal)
-
