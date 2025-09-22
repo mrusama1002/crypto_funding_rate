@@ -5,8 +5,8 @@ from datetime import datetime
 import math
 
 # ----------------- CONFIG -----------------
-WATCHLIST = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT"]
-INTERVALS = ["Min60", "Hour4"]   # Default intervals
+WATCHLIST = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "ADA_USDT", "MYX_USDT", "TUT_USDT"]
+INTERVALS = ["Min15","Min30","Min60", "Hour4"]   # scan multiple intervals
 KL_LIMIT = 200
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 1.5
@@ -116,3 +116,4 @@ if st.button("Run Scanner"):
                 continue
             signal = generate_signal(sym, df, interval)
             st.markdown(signal)
+
