@@ -1,11 +1,6 @@
 streamlit
-python-binance
 requests
-datetime
-math
+pandas
 numpy
-MinMaxScaler
-Sequential
-LSTM
-Dense
-os
+scikit-learn
+tensorflow
