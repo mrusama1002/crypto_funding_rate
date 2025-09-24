@@ -18,7 +18,8 @@ INTERVALS = ["Min5", "Min15", "Min30", "Min60", "Hour4", "Day1"]
 KL_LIMIT = 200
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 1.5
-BACKTEST_SLICES = 50 # Number of recent slices to backtest
+BACKTEST_SLICES = 5
+RSI_PERIOD = 14
 # ------------------------------------------
 
 # ----------------- AI CONFIG -----------------
@@ -61,6 +62,27 @@ def compute_atr(df: pd.DataFrame, period=14):
     df2["TR"] = df2[["H-L", "H-Cprev", "L-Cprev"]].max(axis=1)
     atr = df2["TR"].rolling(period).mean().iloc[-1]
     return None if pd.isna(atr) else float(atr)
+
+def calculate_rsi(df: pd.DataFrame, period=14):
+    """
+    Calculates the Relative Strength Index (RSI).
+    """
+    if df is None or len(df) < period + 1:
+        return None
+
+    delta = df['close'].diff()
+    gain = delta.copy()
+    loss = delta.copy()
+    gain[gain < 0] = 0
+    loss[loss > 0] = 0
+    
+    avg_gain = gain.ewm(com=period - 1, adjust=False).mean()
+    avg_loss = abs(loss.ewm(com=period - 1, adjust=False).mean())
+    
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi.iloc[-1]
 
 def format_number(x):
     if x is None or (isinstance(x, float) and (math.isinf(x) or math.isnan(x))):
@@ -107,12 +129,15 @@ def generate_signal(symbol: str, df: pd.DataFrame, interval: str, prediction: fl
     last = df.iloc[-1]
     current = float(last["close"])
     atr = compute_atr(df, ATR_PERIOD) or (current * 0.005)
+    rsi_value = calculate_rsi(df, RSI_PERIOD)
 
     int_label = interval_to_label(interval)
 
     if prediction is None:
         return f"ℹ️ {symbol} neutral @ {format_number(current)} ({int_label})\n\n🧠 AI prediction not available."
 
+    signal_text = ""
+    
     if prediction > current:
         entry = current
         tp1 = round(entry + 0.5 * atr, 6)
@@ -120,10 +145,11 @@ def generate_signal(symbol: str, df: pd.DataFrame, interval: str, prediction: fl
         tp3 = round(entry + 1.5 * atr, 6)
         stop_loss = round(entry - ATR_MULTIPLIER * atr, 6)
 
-        return (
+        signal_text = (
             f"🚀 **AI LONG SIGNAL** 🚀 | ⏱ {int_label}\n"
             f"💰 Current Price: {format_number(current)}\n"
             f"🧠 Predicted Price: {format_number(prediction)}\n"
+            f"📊 RSI: {format_number(rsi_value)}\n"
             f"🎯 Entry: **{format_number(entry)}**\n"
             f"🎯 TP1: {format_number(tp1)} | TP2: {format_number(tp2)} | TP3: {format_number(tp3)}\n"
             f"🛡️ SL: {format_number(stop_loss)}\n"
@@ -136,45 +162,47 @@ def generate_signal(symbol: str, df: pd.DataFrame, interval: str, prediction: fl
         tp3 = round(entry - 1.5 * atr, 6)
         stop_loss = round(entry + ATR_MULTIPLIER * atr, 6)
 
-        return (
+        signal_text = (
             f"📉 **AI SHORT SIGNAL** 📉 | ⏱ {int_label}\n"
             f"💰 Current Price: {format_number(current)}\n"
             f"🧠 Predicted Price: {format_number(prediction)}\n"
+            f"📊 RSI: {format_number(rsi_value)}\n"
             f"🎯 Entry: **{format_number(entry)}**\n"
             f"🎯 TP1: {format_number(tp1)} | TP2: {format_number(tp2)} | TP3: {format_number(tp3)}\n"
             f"🛡️ SL: {format_number(stop_loss)}\n"
             f"📉 Direction: **Go Short**"
         )
     else:
-        return f"ℹ️ {symbol} neutral @ {format_number(current)} ({int_label})\n\n🧠 AI predicts no significant movement."
+        signal_text = (
+            f"ℹ️ {symbol} neutral @ {format_number(current)} ({int_label})\n"
+            f"📊 RSI: {format_number(rsi_value)}\n"
+            f"🧠 AI predicts no significant movement."
+        )
+
+    return signal_text
 
 def backtest_strategy(df: pd.DataFrame, scaler, model):
     if df is None or len(df) < N_TIMESTEPS + BACKTEST_SLICES:
         return None, None, None
 
-    backtest_data = df.iloc[-(N_TIMESTEPS + BACKTEST_SLICES):]
+    backtest_data = df.iloc[-(N_TIMESTEPS + BACKTEST_SLICES):].reset_index(drop=True)
     profit_loss = 0
     trades = 0
     wins = 0
 
-    # Start backtesting from a point in the recent past
     for i in range(BACKTEST_SLICES):
         slice_df = backtest_data.iloc[:N_TIMESTEPS + i]
         current_df = slice_df.copy()
-
-        # Get the AI prediction for the next candle
+        
         prediction = predict_next_price(model, current_df, scaler)
 
         if prediction is not None:
             current_price = current_df.iloc[-1]["close"]
             actual_next_price = backtest_data.iloc[N_TIMESTEPS + i]["close"]
             
-            # Simulate a trade based on the prediction
             if prediction > current_price:
-                # Long position: Profit is positive if next price goes up
                 pnl = (actual_next_price - current_price) / current_price
             elif prediction < current_price:
-                # Short position: Profit is positive if next price goes down
                 pnl = (current_price - actual_next_price) / current_price
             else:
                 pnl = 0
@@ -185,7 +213,7 @@ def backtest_strategy(df: pd.DataFrame, scaler, model):
             trades += 1
 
     win_rate = (wins / trades) * 100 if trades > 0 else 0
-    total_pnl = profit_loss * 100 # Convert to percentage
+    total_pnl = profit_loss * 100
 
     return round(total_pnl, 2), round(win_rate, 2), trades
 
@@ -195,6 +223,10 @@ st.set_page_config(page_title="MEXC AI Signal Scanner", layout="wide")
 st.title("📊 MEXC Futures Signal Scanner with AI Backtesting")
 st.markdown("This app provides **AI-powered trading signals** and **backtests their performance** on recent historical data.")
 st.markdown("---")
+
+
+[Image of the Relative Strength Index (RSI)]
+
 
 # User input coin
 coin_input = st.text_input("Enter coin (e.g. BTC_USDT) or type ALL:", "ALL").upper()
@@ -210,11 +242,10 @@ if st.button("Run Scanner"):
             for interval in intervals:
                 with st.spinner(f'Fetching and training for {sym} ({interval})...'):
                     df = get_future_klines(sym, interval, KL_LIMIT)
-                    if df is None or len(df) < N_TIMESTEPS + BACKTEST_SLICES:
+                    if df is None or len(df) < N_TIMESTEPS + BACKTEST_SLICES + RSI_PERIOD:
                         st.error(f"Not enough data for {sym} ({interval}) to run AI and backtest.")
                         continue
 
-                    # Prepare data for AI model
                     X, y, scaler, _ = prepare_data_for_lstm(df)
                     if X is None or y is None:
                         st.warning(f"Not enough data to train AI model for {sym} ({interval}). Skipping.")
@@ -223,12 +254,10 @@ if st.button("Run Scanner"):
                         model = create_and_train_lstm_model(X, y)
                         ai_prediction = predict_next_price(model, df, scaler)
 
-                # Generate and display current signal
                 st.markdown(f"### Current AI Signal for {sym} ({interval_to_label(interval)})")
                 signal = generate_signal(sym, df, interval, ai_prediction)
                 st.markdown(signal)
 
-                # Run and display backtest results
                 st.markdown("---")
                 st.markdown(f"### Backtest Results for {sym} ({interval_to_label(interval)})")
                 with st.spinner("Running backtest..."):
@@ -241,4 +270,3 @@ if st.button("Run Scanner"):
                         st.warning("Backtest could not be performed due to insufficient data.")
                 
                 st.markdown("---")
-
