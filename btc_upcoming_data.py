@@ -18,7 +18,7 @@ INTERVALS = ["Min5", "Min15", "Min30", "Min60", "Hour4", "Day1"]
 KL_LIMIT = 200
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 1.5
-BACKTEST_SLICES = 5 # Number of recent slices to backtest
+BACKTEST_SLICES = 50 # Number of recent slices to backtest
 # ------------------------------------------
 
 # ----------------- AI CONFIG -----------------
@@ -241,3 +241,4 @@ if st.button("Run Scanner"):
                         st.warning("Backtest could not be performed due to insufficient data.")
                 
                 st.markdown("---")
+
