@@ -225,9 +225,6 @@ st.markdown("This app provides **AI-powered trading signals** and **backtests th
 st.markdown("---")
 
 
-[Image of the Relative Strength Index (RSI)]
-
-
 # User input coin
 coin_input = st.text_input("Enter coin (e.g. BTC_USDT) or type ALL:", "ALL").upper()
 intervals = st.multiselect("Select intervals", INTERVALS, default=INTERVALS)
@@ -270,3 +267,4 @@ if st.button("Run Scanner"):
                         st.warning("Backtest could not be performed due to insufficient data.")
                 
                 st.markdown("---")
+
